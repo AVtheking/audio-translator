@@ -4,7 +4,7 @@ from google import genai
 from google.genai import types
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
-from supported_languages import SUPPORTED_LANGUAGES
+from fastapi_google_live.supported_languages import SUPPORTED_LANGUAGES
 from pathlib import Path
 from typing import Dict
 import os
