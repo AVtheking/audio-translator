@@ -4,8 +4,9 @@ from google import genai
 from google.genai import types
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
+from supported_languages import SUPPORTED_LANGUAGES
 from pathlib import Path
-
+from typing import Dict
 import os
 import ffmpeg
 import tempfile
@@ -55,11 +56,44 @@ def read_root():
     return {"message": "Hello World"}
 
 
-@app.post("/translate")
+def format_language_list():
+    return "\n".join(
+        [f"- {code}: {name}" for code, name in SUPPORTED_LANGUAGES.items()]
+    )
+
+
+# Then in your FastAPI app
+description = f"""
+Translate an audio file to the specified target language.
+
+**Supported Languages**:
+
+{format_language_list()}
+
+"""
+
+
+@app.post(
+    "/translate",
+    summary="Translate audio to a target language",
+    description=description,
+)
 async def translate(
     audio_file: UploadFile = File(...), target_language: str = Form(...)
 ):
     try:
+        input_path = None
+        output_pcm_path = None
+        if target_language not in SUPPORTED_LANGUAGES:
+            supported_langs = "\n".join(
+                [f"{code}: {name}" for code, name in SUPPORTED_LANGUAGES.items()]
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "message": f"Unsupported language code: {target_language}. Please use one of the following language codes:\n{supported_langs}"
+                },
+            )
         if not audio_file.filename.endswith((".mp3", ".wav", ".m4a", ".ogg")):
             return JSONResponse(
                 status_code=400,
@@ -93,7 +127,7 @@ async def translate(
             status_code=200,
             content={
                 "translation": translation.strip(),
-                "target_language": target_language,
+                "target_language": SUPPORTED_LANGUAGES.get(target_language, "Unknown"),
             },
         )
     except Exception as e:
@@ -103,7 +137,7 @@ async def translate(
         )
 
     finally:
-        if os.path.exists(input_path):
+        if input_path and os.path.exists(input_path):
             os.remove(input_path)
-        if os.path.exists(output_pcm_path):
+        if output_pcm_path and os.path.exists(output_pcm_path):
             os.remove(output_pcm_path)
