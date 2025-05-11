@@ -12,7 +12,8 @@ dependencies = [
     "uvicorn (>=0.34.2,<0.35.0)",
     "google-genai (>=1.14.0,<2.0.0)",
     "python-multipart (>=0.0.20,<0.0.21)",
-    "python-dotenv (>=1.1.0,<2.0.0)"
+    "python-dotenv (>=1.1.0,<2.0.0)",
+    "ffmpeg-python (>=0.2.0,<0.3.0)"
 ]
 
 [tool.poetry]
