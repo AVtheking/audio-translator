@@ -17,7 +17,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
 model = "gemini-2.0-flash-live-001"
 
-config = {"response_modalities": ["TEXT"]}
+CONFIG = {"response_modalities": ["TEXT"]}
 
 app = FastAPI()
 
@@ -26,6 +26,28 @@ def convert_to_pcm(input_path: str, output_path: str):
     ffmpeg.input(input_path).output(
         output_path, format="s16le", acodec="pcm_s16le", ac=1, ar="16000"
     ).overwrite_output().run()
+
+
+async def get_translation(audio_bytes: bytes, system_instruction: types.Content):
+    translation = ""
+    async with client.aio.live.connect(
+        model=model,
+        config={
+            **CONFIG,
+            "system_instruction": system_instruction,
+        },
+    ) as session:
+
+        await session.send_realtime_input(
+            media=types.Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000")
+        )
+        await session.send_realtime_input(audio_stream_end=True)
+
+        async for msg in session.receive():
+            if msg.text is not None:
+                translation += msg.text
+
+    return translation
 
 
 @app.get("/")
@@ -51,44 +73,26 @@ async def translate(
             temp_audio_file.write(await audio_file.read())
             input_path = temp_audio_file.name
 
-        print(input_path)
-
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pcm") as tmp_out:
             output_pcm_path = tmp_out.name
 
         convert_to_pcm(input_path, output_pcm_path)
         audio_bytes = Path(output_pcm_path).read_bytes()
 
-        async with client.aio.live.connect(
-            model=model,
-            config={
-                **config,
-                "system_instruction": types.Content(
-                    parts=[
-                        types.Part(
-                            text=f"You are a helpful assistant.Translate the audio to {target_language}."
-                        )
-                    ],
-                ),
-            },
-        ) as session:
-            print("Sending audio to Google")
+        system_instruction = types.Content(
+            parts=[
+                types.Part(
+                    text=f"You are a helpful assistant.Translate the audio to {target_language}."
+                )
+            ]
+        )
 
-            await session.send_realtime_input(
-                media=types.Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000")
-            )
-            print("Waiting for response from Google")
-            await session.send_realtime_input(audio_stream_end=True)
-            tranlation = ""
-            async for msg in session.receive():
-                print("Received response from Google", msg)
-                if msg.text is not None:
-                    tranlation += msg.text
+        translation = await get_translation(audio_bytes, system_instruction)
 
         return JSONResponse(
             status_code=200,
             content={
-                "translation": tranlation.strip(),
+                "translation": translation.strip(),
                 "target_language": target_language,
             },
         )
