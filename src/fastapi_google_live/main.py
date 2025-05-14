@@ -1,54 +1,41 @@
-from fastapi import FastAPI
+from fastapi import (
+    FastAPI,
+    status,
+    BackgroundTasks,
+    Depends,
+    File,
+    UploadFile,
+    Form,
+    HTTPException,
+)
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.responses import JSONResponse
+from fastapi_google_live.request import TranslationRequest
+from fastapi_google_live.responses import ErrorResponse, TranslationResponse
 from fastapi_google_live.supported_languages import SUPPORTED_LANGUAGES
+from fastapi_google_live.client import get_gemini_client
+from fastapi_google_live.settings import get_settings, Settings
+from fastapi_google_live.cleanup import cleanup_files
+from fastapi_google_live.translation import (
+    convert_to_pcm,
+    get_translation,
+    format_language_list,
+)
 from pathlib import Path
-from typing import Dict
-import os
-import ffmpeg
 import tempfile
+import logging
 
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-client = genai.Client(api_key=GEMINI_API_KEY)
-model = "gemini-2.0-flash-live-001"
+app = FastAPI(
+    title="Audio Translation API",
+    description="API for translating audio files using Google Gemini.",
+)
 
-CONFIG = {"response_modalities": ["TEXT"]}
-
-app = FastAPI()
-
-
-def convert_to_pcm(input_path: str, output_path: str):
-    ffmpeg.input(input_path).output(
-        output_path, format="s16le", acodec="pcm_s16le", ac=1, ar="16000"
-    ).overwrite_output().run()
-
-
-async def get_translation(audio_bytes: bytes, system_instruction: types.Content):
-    translation = ""
-    async with client.aio.live.connect(
-        model=model,
-        config={
-            **CONFIG,
-            "system_instruction": system_instruction,
-        },
-    ) as session:
-
-        await session.send_realtime_input(
-            media=types.Blob(data=audio_bytes, mime_type="audio/pcm;rate=16000")
-        )
-        await session.send_realtime_input(audio_stream_end=True)
-
-        async for msg in session.receive():
-            if msg.text is not None:
-                translation += msg.text
-
-    return translation
+logger = logging.getLogger("uvicorn.error")
 
 
 @app.get("/")
@@ -56,13 +43,6 @@ def read_root():
     return {"message": "Hello World"}
 
 
-def format_language_list():
-    return "\n".join(
-        [f"- {code}: {name}" for code, name in SUPPORTED_LANGUAGES.items()]
-    )
-
-
-# Then in your FastAPI app
 description = f"""
 Translate an audio file to the specified target language.
 
@@ -77,30 +57,34 @@ Translate an audio file to the specified target language.
     "/translate",
     summary="Translate audio to a target language",
     description=description,
+    response_model=TranslationResponse,
+    responses={
+        status.HTTP_200_OK: {"model": TranslationResponse},
+        status.HTTP_400_BAD_REQUEST: {"model": ErrorResponse},
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {"model": ErrorResponse},
+    },
 )
 async def translate(
-    audio_file: UploadFile = File(...), target_language: str = Form(...)
+    background_tasks: BackgroundTasks,
+    audio_file: UploadFile = File(...),
+    target_language: str = Form(...),
+    client: genai.Client = Depends(get_gemini_client),
+    settings: Settings = Depends(get_settings),
 ):
     try:
-        input_path = None
-        output_pcm_path = None
-        if target_language not in SUPPORTED_LANGUAGES:
-            supported_langs = "\n".join(
-                [f"{code}: {name}" for code, name in SUPPORTED_LANGUAGES.items()]
-            )
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "message": f"Unsupported language code: {target_language}. Please use one of the following language codes:\n{supported_langs}"
-                },
-            )
+        input_path: str | None = None
+        output_pcm_path: str | None = None
+
+        translation_request = TranslationRequest(target_language=target_language)
+
         if not audio_file.filename.endswith((".mp3", ".wav", ".m4a", ".ogg")):
             return JSONResponse(
-                status_code=400,
-                content={"message": "Unsupported file format"},
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=ErrorResponse(message="Unsupported file format").model_dump(),
             )
 
         suffix = Path(audio_file.filename).suffix
+
         with tempfile.NamedTemporaryFile(
             delete=False, suffix=suffix
         ) as temp_audio_file:
@@ -110,7 +94,10 @@ async def translate(
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pcm") as tmp_out:
             output_pcm_path = tmp_out.name
 
-        convert_to_pcm(input_path, output_pcm_path)
+        logger.info(f"Converting audio to PCM: {output_pcm_path}")
+        await convert_to_pcm(input_path, output_pcm_path, settings.PCM_SAMPLE_RATE)
+        logger.info(f"Converted audio to PCM: {output_pcm_path}")
+
         audio_bytes = Path(output_pcm_path).read_bytes()
 
         system_instruction = types.Content(
@@ -121,23 +108,35 @@ async def translate(
             ]
         )
 
-        translation = await get_translation(audio_bytes, system_instruction)
+        translation = await get_translation(
+            client,
+            settings.GEMINI_MODEL,
+            settings.GEMINI_CONFIG,
+            audio_bytes,
+            system_instruction,
+        )
 
         return JSONResponse(
-            status_code=200,
-            content={
-                "translation": translation.strip(),
-                "target_language": SUPPORTED_LANGUAGES.get(target_language, "Unknown"),
-            },
+            status_code=status.HTTP_200_OK,
+            content=TranslationResponse(
+                translation=translation.strip(),
+                target_language=translation_request.target_language_name,
+            ).model_dump(),
+        )
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"Error translating audio: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=ErrorResponse(message=str(e)).model_dump(),
         )
     except Exception as e:
+        logger.error(f"Error translating audio: {e}")
         return JSONResponse(
-            status_code=500,
-            content={"message": str(e)},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=ErrorResponse(message=str(e)).model_dump(),
         )
 
     finally:
-        if input_path and os.path.exists(input_path):
-            os.remove(input_path)
-        if output_pcm_path and os.path.exists(output_pcm_path):
-            os.remove(output_pcm_path)
+        background_tasks.add_task(cleanup_files, input_path, output_pcm_path)

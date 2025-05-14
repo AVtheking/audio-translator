@@ -2,9 +2,7 @@
 name = "fastapi-google-live"
 version = "0.1.0"
 description = ""
-authors = [
-    {name = "Ankit varshney",email = "lyfflame45@gmail.com"}
-]
+authors = [{ name = "Ankit varshney", email = "lyfflame45@gmail.com" }]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -13,11 +11,12 @@ dependencies = [
     "google-genai (>=1.14.0,<2.0.0)",
     "python-multipart (>=0.0.20,<0.0.21)",
     "python-dotenv (>=1.1.0,<2.0.0)",
-    "ffmpeg-python (>=0.2.0,<0.3.0)"
+    "ffmpeg-python (>=0.2.0,<0.3.0)",
+    "pydantic-settings (>=2.9.1,<3.0.0)",
 ]
 
 [tool.poetry]
-packages = [{include = "fastapi_google_live", from = "src"}]
+packages = [{ include = "fastapi_google_live", from = "src" }]
 
 
 [build-system]
