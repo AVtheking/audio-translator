@@ -77,7 +77,10 @@ async def translate(
 
         translation_request = TranslationRequest(target_language=target_language)
 
-        if not audio_file.filename.endswith((".mp3", ".wav", ".m4a", ".ogg")):
+        if not audio_file.filename or not any(
+            audio_file.filename.endswith(f".{ext}")
+            for ext in settings.SUPPORTED_AUDIO_FORMATS
+        ):
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content=ErrorResponse(message="Unsupported file format").model_dump(),
