@@ -7,6 +7,8 @@ from fastapi import (
     UploadFile,
     Form,
     HTTPException,
+    TrustedHostMiddleware,
+    CQRSMiddleware,
 )
 from dotenv import load_dotenv
 from google import genai
@@ -33,6 +35,19 @@ load_dotenv()
 app = FastAPI(
     title="Audio Translation API",
     description="API for translating audio files using Google Gemini.",
+)
+
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["translate.varankit.me", "localhost", "127.0.0.1 "],
+)
+
+app.add_middleware(
+    CQRSMiddleware,
+    allow_origins=["https://translate.varankit.me", "http://localhost:8000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 logger = logging.getLogger("uvicorn.error")
